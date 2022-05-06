@@ -22,6 +22,6 @@ You can buy the parts online or from whatever store you chose
 
 1-Magneto.py  : The meter code 
 
-PiicoDev_QMC6310.py   : QMC6310 library for micropython for RPi Pico
+2-PiicoDev_QMC6310.py   : QMC6310 library for micropython for RPi Pico
 
-PiicoDev_Unified.py   : I2C library for micropython for RPi Pico
+3-PiicoDev_Unified.py   : I2C library for micropython for RPi Pico
