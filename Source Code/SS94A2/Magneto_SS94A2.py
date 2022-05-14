@@ -14,11 +14,12 @@ Cal = Voltage           #Calibration voltage
 while True :
   ADC_Voltage = (reading * VoltageRef) / 1024.0
   Voltage = ADC_Voltage
-  #Gauss = ((Voltage - Cal)/0.00033)    #Calculating EQN - Left unkown for consulting 
-  def sensorCallback(channel):
-  # Called if sensor output changes
-    timestamp = time.time()
-    stamp = datetime.datetime.fromtimestamp(timestamp).strftime('%H:%M:%S')
-    if adc.read_u16(channel):
+  if Voltage != 0 :
+      #Gauss = ((Voltage - Cal)/0.00033)    #Calculating EQN - Left unkown for consulting 
+      def sensorCallback(channel):
+      # Called if sensor output changes
+      timestamp = time.time()
+      stamp = datetime.datetime.fromtimestamp(timestamp).strftime('%H:%M:%S')
+      if adc.read_u16(channel):
          print(adc.read_u16 Gauss)  
   time.sleep(1.5)
