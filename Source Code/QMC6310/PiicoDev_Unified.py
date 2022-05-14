@@ -1,250 +1,152 @@
-# Class and methods for the QMC6310 3-axis magnetometer.
-# Written by Peter Johnston and Michael Ruppe at Core Electronics
+"""
+PiicoDev.py: Unifies I2C drivers for different builds of MicroPython
+"""
+import os
+_SYSNAME = os.uname().sysname
+compat_ind = 1
+i2c_err_str = "PiicoDev could not communicate with module at address 0x{:02X}, check wiring"
 
-# 2022 MAR 17 - Initial release
-# 2022 APR 27 - Add initialisation parameters 'sign_z', 'sign_y', 'sign_z'.  Changed default sign to match silk screen. Updated the readPolar method to match the inversion of the Y axis.
-
-import math
-from PiicoDev_Unified import *
-
-compat_str = '\nUnified PiicoDev library out of date.  Get the latest module: https://piico.dev/unified \n'
-
-_I2C_ADDRESS = 0x1C
-# Registers
-_ADDRESS_XOUT = 0x01
-_ADDRESS_YOUT = 0x03
-_ADDRESS_ZOUT = 0x05
-_ADDRESS_STATUS = 0x09
-_ADDRESS_CONTROL1 = 0x0A
-_ADDRESS_CONTROL2 = 0x0B
-_ADDRESS_SIGN = 0x29
-_BIT_MODE = 0
-_BIT_ODR = 2
-_BIT_OSR1 = 4
-_BIT_OSR2 = 6
-_BIT_RANGE = 2
-
-def _readBit(x, n):
-    return x & 1 << n != 0
-
-def _setBit(x, n):
-    return x | (1 << n)
-
-def _clearBit(x, n):
-    return x & ~(1 << n)
-
-def _writeBit(x, n, b):
-    if b == 0:
-        return _clearBit(x, n)
-    else:
-        return _setBit(x, n)
-
-def _writeCrumb(x, n, c):
-    x = _writeBit(x, n, _readBit(c, 0))
-    return _writeBit(x, n+1, _readBit(c, 1))
-
-class PiicoDev_QMC6310(object):
-    range_gauss = {3000:1e-3, 1200:4e-4, 800:2.6666667e-4, 200:6.6666667e-5} # Maps the range (key) to sensitivity (lsb/gauss)
-    range_microtesla = {3000:1e-1, 1200:4e-2, 800:2.6666667e-2, 200:6.6666667e-3} # Maps the range (key) to sensitivity (lsb/microtesla)
-    def __init__(self, bus=None, freq=None, sda=None, scl=None, addr=_I2C_ADDRESS, odr=3, osr1=0, osr2=3, range=3000, sign_x=0, sign_y=1, sign_z=1, calibrationFile='calibration.cal', suppress_warnings=False):
-        try:
-            if compat_ind >= 1:
-                pass
-            else:
-                print(compat_str)
-        except:
-            print(compat_str)
-        self.i2c = create_unified_i2c(bus=bus, freq=freq, sda=sda, scl=scl)
-        self.addr = addr
-        self.odr = odr
-        self.calibrationFile = calibrationFile
-        self.suppress_warnings = suppress_warnings
-        self._CR1 = 0x00
-        self._CR2 = 0x00
-        sign = sign_x + sign_y*2 + sign_z*4
-        try:
-            self._setMode(1)
-            self.setOutputDataRate(odr)
-            self.setOverSamplingRatio(osr1)
-            self.setOverSamplingRate(osr2)
-            self.setRange(range)
-            self._setSign(sign)
-        except Exception as e:
-            print(i2c_err_str.format(self.addr))
-            raise e
-        self.x_offset = 0
-        self.y_offset = 0
-        self.z_offset = 0
-        self.declination = 0
-        self.data = {}
-        self._dataValid = False
-        if calibrationFile is not None:
-            self.loadCalibration()
-        sleep_ms(5)
+if _SYSNAME == 'microbit':
+    from microbit import i2c
+    from utime import sleep_ms
     
-    def _setMode(self, mode):
-        self._CR1 = _writeCrumb(self._CR1, _BIT_MODE, mode)
-        self.i2c.writeto_mem(self.addr, _ADDRESS_CONTROL1, bytes([self._CR1]))
-
-    def setOutputDataRate(self, odr):
-        self._CR1 = _writeCrumb(self._CR1, _BIT_ODR, odr)
-        self.i2c.writeto_mem(self.addr, _ADDRESS_CONTROL1, bytes([self._CR1]))
-
-    def setOverSamplingRatio(self, osr1):
-        self._CR1 = _writeCrumb(self._CR1, _BIT_OSR1, osr1)
-        self.i2c.writeto_mem(self.addr, _ADDRESS_CONTROL1, bytes([self._CR1]))
-
-    def setOverSamplingRate(self, osr2):
-        self._CR1 = _writeCrumb(self._CR1, _BIT_OSR2, osr2)
-        self.i2c.writeto_mem(self.addr, _ADDRESS_CONTROL1, bytes([self._CR1]))
-
-    def setRange(self, range):
-        assert range in [3000,1200,800,200], "range must be 200,800,1200,3000 (uTesla)"
-        r={3000:0, 1200:1, 800:2, 200:3}
-        self.sensitivity=self.range_microtesla[range]
-        self._CR2 = _writeCrumb(self._CR2, _BIT_RANGE, r[range])
-        self.i2c.writeto_mem(self.addr, _ADDRESS_CONTROL2, bytes([self._CR2]))
-
-    def _setSign(self, sign):
-        self.i2c.writeto_mem(self.addr, _ADDRESS_SIGN, bytes([sign]))
-
-    def _convertAngleToPositive(self, angle):
-        if angle >= 360.0:
-            angle = angle - 360.0
-        if angle < 0:
-            angle = angle + 360.0
-        return angle
+elif _SYSNAME == 'Linux':
+    from smbus2 import SMBus, i2c_msg
+    from time import sleep
+    from math import ceil
     
-    def _getControlRegisters(self):
-        return self.i2c.readfrom_mem(self.addr, _ADDRESS_CONTROL1, 2)
-            
-    def _getStatusReady(self, status):
-        return _readBit(status, 0)
-        
-    def _getStatusOverflow(self, status):
-        return _readBit(status, 1)
-    
-    def read(self, raw=False):
-        self._dataValid = False
-        NaN = {'x':float('NaN'),'y':float('NaN'),'z':float('NaN')}
-        try:
-            status = int.from_bytes(self.i2c.readfrom_mem(self.addr, _ADDRESS_STATUS, 1), 'big')
-        except:
-            print(i2c_err_str.format(self.addr))
-            self.sample = NaN
-            return NaN
-        if self._getStatusReady(status) is True:
-            try:
-                x = int.from_bytes(self.i2c.readfrom_mem(self.addr, _ADDRESS_XOUT, 2), 'little')
-                y = int.from_bytes(self.i2c.readfrom_mem(self.addr, _ADDRESS_YOUT, 2), 'little')
-                z = int.from_bytes(self.i2c.readfrom_mem(self.addr, _ADDRESS_ZOUT, 2), 'little')
-            except:
-                print(i2c_err_str.format(self.addr))
-                self.sample = NaN
-                return self.sample
-            if self._getStatusOverflow(status) is True:
-#                 print('Overflow')
-                return NaN
-            if (x >= 0x8000):
-                x = -((65535 - x) + 1)
-            x = (x - self.x_offset)
-            if (y >= 0x8000):
-                y = -((65535 - y) + 1)
-            y = (y - self.y_offset)
-            if (z >= 0x8000):
-                z = -((65535 - z) + 1)
-            z = (z - self.z_offset)
-            if raw is False:
-                x *= self.sensitivity
-                y *= self.sensitivity
-                z *= self.sensitivity
-            self.sample = {'x':x,'y':y,'z':z}
-            self._dataValid = True
-            return self.sample
+    def sleep_ms(t):
+        sleep(t/1000)
+
+else:
+    from machine import I2C
+    from utime import sleep_ms
+
+class I2CBase:
+    def writeto_mem(self, addr, memaddr, buf, *, addrsize=8):
+        raise NotImplementedError("writeto_mem")
+
+    def readfrom_mem(self, addr, memaddr, nbytes, *, addrsize=8):
+        raise NotImplementedError("readfrom_mem")
+
+    def write8(self, addr, buf, stop=True):
+        raise NotImplementedError("write")
+
+    def read16(self, addr, nbytes, stop=True):
+        raise NotImplementedError("read")
+
+    def __init__(self, bus=None, freq=None, sda=None, scl=None):
+        raise NotImplementedError("__init__")
+
+class I2CUnifiedMachine(I2CBase):
+    def __init__(self, bus=None, freq=None, sda=None, scl=None):
+        if bus is None:
+            bus = 0
+        if freq is not None and sda is not None and scl is not None:
+            print("Using supplied freq, sda and scl to create machine I2C")
+            self.i2c = I2C(bus, freq=freq, sda=sda, scl=scl)
         else:
-            print('Not Ready')
-            self.sample = NaN
-            return self.sample
-    
-    def dataValid(self):
-        return self._dataValid
-    
-    def readPolar(self):
-        cartesian = self.read()
-        angle = ( math.atan2(cartesian['x'],-cartesian['y']) /math.pi)*180.0 + self.declination
-        angle = self._convertAngleToPositive(angle)
-        magnitude = math.sqrt(cartesian['x']*cartesian['x'] + cartesian['y']*cartesian['y'] + cartesian['z']*cartesian['z'])
-        return {'polar':angle, 'Gauss':magnitude*100, 'uT':magnitude}
-    
-    def readMagnitude(self):
-        return self.readPolar()['uT']
-    
-    def readHeading(self):
-        return self.readPolar()['polar']
-    
-    def setDeclination(self, dec):
-        self.declination = dec
-    
-    def calibrate(self, enable_logging=False):
-        try:
-            self.setOutputDataRate(3)
-        except Exception as e:
-            print(i2c_err_str.format(self.addr))
-            raise e
-        x_min = 65535
-        x_max = -65535
-        y_min = 65535
-        y_max = -65535
-        z_min = 65535
-        z_max = -65535
-        log = ''
-        print('*** Calibrating.\n    Slowly rotate your sensor until the bar is full')
-        print('[          ]', end='')
-        range = 1000
-        i = 0
-        x=0;y=0;z=0;
-        a=0.5 # EMA filter weight
-        while i < range:
-            i += 1
-            sleep_ms(5)
-            d = self.read(raw=True)
-            x = a*d['x'] + (1-a)*x # EMA filter
-            y = a*d['y'] + (1-a)*y
-            z = a*d['z'] + (1-a)*z
-            if x < x_min: x_min = x; i=0
-            if x > x_max: x_max = x; i=0
-            if y < y_min: y_min = y; i=0
-            if y > y_max: y_max = y; i=0
-            if z < z_min: z_min = z; i=0
-            if z > z_max: z_max = z; i=0
-            j = round(10*i/range);
-            print( '\015[' + int(j)*'*' + int(10-j)*' ' + ']', end='') # print a progress bar
-            if enable_logging:
-                log = log + (str(cartesian['x']) + ',' + str(cartesian['y']) + ',' + str(cartesian['z']) + '\n')
-        self.setOutputDataRate(self.odr) # set the output data rate back to the user selected rate
-        self.x_offset = (x_max + x_min) / 2
-        self.y_offset = (y_max + y_min) / 2
-        self.z_offset = (z_max + z_min) / 2
-        f = open(self.calibrationFile, "w")
-        f.write('x_min:\n' + str(x_min) + '\nx_max:\n' + str(x_max) + '\ny_min:\n' + str(y_min) + '\ny_max:\n' + str(y_max) + '\nz_min\n' + str(z_min) + '\nz_max:\n' + str(z_max) + '\nx_offset:\n')
-        f.write(str(self.x_offset) + '\ny_offset:\n' + str(self.y_offset) + '\nz_offset:\n' + str(self.z_offset))
-        f.close()
-        if enable_logging:
-            flog = open("calibration.log", "w")
-            flog.write(log)
-            flog.close
+            self.i2c = I2C(bus)
 
-    def loadCalibration(self):
-        try:
-            f = open(self.calibrationFile, "r")
-            for i in range(13): f.readline()
-            self.x_offset = float(f.readline())
-            f.readline()
-            self.y_offset = float(f.readline())
-            f.readline()
-            self.z_offset = float(f.readline())
-            sleep_ms(5)
-        except:
-            if not self.suppress_warnings:
-                print("No calibration file found. Run 'calibrate()' for best results.  Visit https://piico.dev/p15 for more info.")
-            sleep_ms(1000)
+        self.writeto_mem = self.i2c.writeto_mem
+        self.readfrom_mem = self.i2c.readfrom_mem
+
+    def write8(self, addr, reg, data):
+        if reg is None:
+            self.i2c.writeto(addr, data)
+        else:
+            self.i2c.writeto(addr, reg + data)
+            
+    def read16(self, addr, reg):
+        self.i2c.writeto(addr, reg, False)
+        return self.i2c.readfrom(addr, 2)
+
+class I2CUnifiedMicroBit(I2CBase):
+    def __init__(self, freq=None):
+        if freq is not None:
+            print("Initialising I2C freq to {}".format(freq))
+            microbit.i2c.init(freq=freq)
+            
+    def writeto_mem(self, addr, memaddr, buf, *, addrsize=8):
+        ad = memaddr.to_bytes(addrsize // 8, 'big')  # pad address for eg. 16 bit
+        i2c.write(addr, ad + buf)
+        
+    def readfrom_mem(self, addr, memaddr, nbytes, *, addrsize=8):
+        ad = memaddr.to_bytes(addrsize // 8, 'big')  # pad address for eg. 16 bit
+        i2c.write(addr, ad, repeat=True)
+        return i2c.read(addr, nbytes)    
+    
+    def write8(self, addr, reg, data):
+        if reg is None:
+            i2c.write(addr, data)
+        else:
+            i2c.write(addr, reg + data)
+
+    def read16(self, addr, reg):
+        i2c.write(addr, reg, repeat=True)
+        return i2c.read(addr, 2)
+            
+class I2CUnifiedLinux(I2CBase):
+    def __init__(self, bus=None):
+        if bus is None:
+            bus = 1
+        self.i2c = SMBus(bus)
+
+    def readfrom_mem(self, addr, memaddr, nbytes, *, addrsize=8):
+        data = [None] * nbytes # initialise empty list
+        self.smbus_i2c_read(addr, memaddr, data, nbytes, addrsize=addrsize)
+        return data
+    
+    def writeto_mem(self, addr, memaddr, buf, *, addrsize=8):
+        self.smbus_i2c_write(addr, memaddr, buf, len(buf), addrsize=addrsize)
+    
+    def smbus_i2c_write(self, address, reg, data_p, length, addrsize=8):
+        ret_val = 0
+        data = []
+        for index in range(length):
+            data.append(data_p[index])
+        if addrsize == 8:
+            msg_w = i2c_msg.write(address, [reg] + data)
+        elif addrsize == 16:
+            msg_w = i2c_msg.write(address, [reg >> 8, reg & 0xff] + data)
+        else:
+            raise Exception("address must be 8 or 16 bits long only")
+        self.i2c.i2c_rdwr(msg_w)
+        return ret_val
+        
+    def smbus_i2c_read(self, address, reg, data_p, length, addrsize=8):
+        ret_val = 0
+        if addrsize == 8:
+            msg_w = i2c_msg.write(address, [reg]) # warning this is set up for 16-bit addresses
+        elif addrsize == 16:
+            msg_w = i2c_msg.write(address, [reg >> 8, reg & 0xff]) # warning this is set up for 16-bit addresses
+        else:
+            raise Exception("address must be 8 or 16 bits long only")
+        msg_r = i2c_msg.read(address, length)
+        self.i2c.i2c_rdwr(msg_w, msg_r)
+        if ret_val == 0:
+            for index in range(length):
+                data_p[index] = ord(msg_r.buf[index])
+        return ret_val
+    
+    def write8(self, addr, reg, data):
+        if reg is None:
+            d = int.from_bytes(data, 'big')
+            self.i2c.write_byte(addr, d)
+        else:
+            r = int.from_bytes(reg, 'big')
+            d = int.from_bytes(data, 'big')
+            self.i2c.write_byte_data(addr, r, d)
+    
+    def read16(self, addr, reg):
+        regInt = int.from_bytes(reg, 'big')
+        return self.i2c.read_word_data(addr, regInt).to_bytes(2, byteorder='little', signed=False)
+
+def create_unified_i2c(bus=None, freq=None, sda=None, scl=None):
+    if _SYSNAME == 'microbit':
+        i2c = I2CUnifiedMicroBit(freq=freq)
+    elif _SYSNAME == 'Linux':
+        i2c = I2CUnifiedLinux(bus=bus)
+    else:
+        i2c = I2CUnifiedMachine(bus=bus, freq=freq, sda=sda, scl=scl)
+    return i2c
