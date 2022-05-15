@@ -1,5 +1,4 @@
 # Class and methods for the QMC6310 3-axis magnetometer.
-# Written by Peter Johnston and Michael Ruppe at Core Electronics
 
 # 2022 MAR 17 - Initial release
 # 2022 APR 27 - Add initialisation parameters 'sign_z', 'sign_y', 'sign_z'.  Changed default sign to match silk screen. Updated the readPolar method to match the inversion of the Y axis.
