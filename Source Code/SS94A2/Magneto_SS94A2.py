@@ -43,7 +43,7 @@ while True :
   ADC_Voltage = (reading * VoltageRef) / 1024.0
   Voltage = ADC_Voltage
   if Voltage != 0 :
-      #Gauss = ((Voltage - Cal)/0.00033)    #Calculating EQN - Left unkown for consulting 
+      Gauss = ((Voltage - Cal)/0.00033)    #Change with a propre EQN for the used senosor 
       def sensorCallback(channel):
       # Called if sensor output changes
       timestamp = time.time()
